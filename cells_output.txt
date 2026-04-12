@@ -1,0 +1,834 @@
+
+--- Cell 0 (markdown) ---
+# Project A: Market-Level Sentiment Trading Strategy
+
+## Environment Setup & Data Loading
+
+--- Cell 1 (code) ---
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from IPython.display import display
+
+
+sns.set_style('whitegrid')
+np.random.seed(42)
+
+--- Cell 2 (markdown) ---
+## 1. Data Loading and Initial Setup
+
+--- Cell 3 (code) ---
+# Load datasets
+labeled_df = pd.read_csv('../tut/Tutorial 3-20260304/wsj_finbert_labeled_16000.csv')
+headlines_df = pd.read_csv('../cw/ECOM217_data/Shared_wsj_headlines_2023.csv')
+spx_df = pd.read_csv('../cw/ECOM217_data/ProjectA_spx_index_daily_2023.csv')
+
+print(f"Labeled data shape: {labeled_df.shape}")
+print(f"Full headlines shape: {headlines_df.shape}")
+print(f"SPX data shape: {spx_df.shape}")
+
+--- Cell 4 (markdown) ---
+## Part A: NLP Pipeline
+
+--- Cell 5 (markdown) ---
+### Benchmark Model: TF-IDF -> PCA -> Logistic Regression
+Train model on the labeled subset and report metrics.
+
+--- Cell 6 (code) ---
+from sklearn.model_selection import train_test_split
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.decomposition import TruncatedSVD
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import classification_report, accuracy_score, precision_recall_fscore_support
+
+# Ensure binary/multi-class setup matches the requirement. Let's see sentiment labels:
+# Here we will drop 'neutral' if we only want positive/negative, or map it if it's multiclass.
+labeled_df = labeled_df.dropna(subset=['sentiment', 'text'])
+X = labeled_df['text']
+y = labeled_df['sentiment']
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+--- Cell 7 (code) ---
+# 1. TF-IDF
+tfidf = TfidfVectorizer(max_features=5000, stop_words='english')
+X_train_tfidf = tfidf.fit_transform(X_train)
+X_test_tfidf = tfidf.transform(X_test)
+
+# 2. PCA (TruncatedSVD for sparse matrices)
+n_components = min(100, X_train_tfidf.shape[1] - 1)
+svd = TruncatedSVD(n_components=n_components, random_state=42)
+X_train_pca = svd.fit_transform(X_train_tfidf)
+X_test_pca = svd.transform(X_test_tfidf)
+
+# 3. Logistic Regression
+lr = LogisticRegression(max_iter=1000, random_state=42)
+lr.fit(X_train_pca, y_train)
+y_pred = lr.predict(X_test_pca)
+
+print("Benchmark Model Evaluation:")
+print(classification_report(y_test, y_pred))
+
+--- Cell 8 (markdown) ---
+### Apply to Full Dataset (~146K headlines)
+
+--- Cell 9 (code) ---
+# Predict on the full headlines dataset
+headlines_df['headline'] = headlines_df['headline'].fillna('')
+X_full_tfidf = tfidf.transform(headlines_df['headline'])
+X_full_pca = svd.transform(X_full_tfidf)
+
+headlines_df['sentiment_pred'] = lr.predict(X_full_pca)
+display(headlines_df['sentiment_pred'].value_counts())
+
+--- Cell 10 (markdown) ---
+### Advanced Model: LSTM
+
+--- Cell 11 (code) ---
+# from tensorflow.keras.models import Sequential
+# from tensorflow.keras.layers import Embedding, LSTM, Dense, Dropout
+# from tensorflow.keras.preprocessing.text import Tokenizer
+# from tensorflow.keras.preprocessing.sequence import pad_sequences
+# import tensorflow as tf
+
+# # Convert targets to binary (assuming binary labels)
+# train_texts = X_train.values.astype(str)
+# test_texts = X_test.values.astype(str)
+# y_train_num = (y_train == 'positive').astype(int).values
+# y_test_num = (y_test == 'positive').astype(int).values
+
+# tokenizer = Tokenizer(num_words=5000)
+# tokenizer.fit_on_texts(train_texts)
+
+# X_train_seq = pad_sequences(tokenizer.texts_to_sequences(train_texts), maxlen=50)
+# X_test_seq = pad_sequences(tokenizer.texts_to_sequences(test_texts), maxlen=50)
+
+# model = Sequential([
+#     Embedding(5000, 64, input_length=50),
+#     LSTM(32),
+#     Dense(1, activation='sigmoid')
+# ])
+# model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+
+# history = model.fit(X_train_seq, y_train_num, epochs=3, validation_data=(X_test_seq, y_test_num), batch_size=64, verbose=1)
+
+# y_pred_prob_lstm = model.predict(X_test_seq)
+# y_pred_lstm = (y_pred_prob_lstm > 0.5).astype(int)
+
+from sklearn.preprocessing import LabelEncoder
+
+# Encode string labels ('negative', 'neutral', 'positive') to integers (0, 1, 2)
+label_encoder = LabelEncoder()
+y_train_num = label_encoder.fit_transform(y_train)
+y_test_num = label_encoder.transform(y_test)
+
+tokenizer = Tokenizer(num_words=5000)
+tokenizer.fit_on_texts(train_texts)
+
+X_train_seq = pad_sequences(tokenizer.texts_to_sequences(train_texts), maxlen=50)
+X_test_seq = pad_sequences(tokenizer.texts_to_sequences(test_texts), maxlen=50)
+
+model = Sequential([
+    Embedding(5000, 64, input_length=50),
+    LSTM(32),
+    # Change from 1 output node with sigmoid to 3 output nodes with softmax
+    Dense(3, activation='softmax')
+])
+
+# Use sparse_categorical_crossentropy for integer-class targets
+model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
+
+history = model.fit(X_train_seq, y_train_num, epochs=3, validation_data=(X_test_seq, y_test_num), batch_size=64, verbose=1)
+
+# Get the highest-probability class index for predictions
+y_pred_prob_lstm = model.predict(X_test_seq)
+y_pred_lstm = np.argmax(y_pred_prob_lstm, axis=1) 
+
+
+--- Cell 12 (markdown) ---
+### 7 Required Visualizations
+
+--- Cell 13 (code) ---
+# # 1. Accuracy bar chart
+# y_pred_num = (y_pred == 'positive').astype(int)
+# acc_logreg = accuracy_score((y_test == 'positive').astype(int), y_pred_num)
+# acc_lstm = accuracy_score(y_test_num, y_pred_lstm)
+
+# fig = px.bar(
+#     x=['LogReg (TF-IDF+PCA)', 'LSTM'], 
+#     y=[acc_logreg, acc_lstm],
+#     labels={'x': 'Model', 'y': 'Accuracy'},
+#     title='Model Accuracy Comparison',
+#     color=['LogReg (TF-IDF+PCA)', 'LSTM'],
+#     template='plotly_dark'
+# )
+
+# fig.update_layout(showlegend=False)
+# fig.show()
+
+# 1. Accuracy bar chart (Now an honest 3-class comparison)
+acc_logreg = accuracy_score(y_test, y_pred)        # Raw textual predictions from LogReg
+acc_lstm = accuracy_score(y_test_num, y_pred_lstm) # Raw numeric predictions from LSTM
+
+fig = px.bar(
+    x=['LogReg (TF-IDF+PCA)', 'LSTM'], 
+    y=[acc_logreg, acc_lstm],
+    labels={'x': 'Model', 'y': 'Accuracy'},
+    title='Model Accuracy Comparison (3-Class)',
+    color=['LogReg (TF-IDF+PCA)', 'LSTM'],
+    template='plotly_dark'
+)
+
+fig.update_layout(showlegend=False)
+fig.show()
+
+
+--- Cell 14 (code) ---
+# # 2. Top TF-IDF terms: positive vs. negative
+# feature_names = tfidf.get_feature_names_out()
+# lr_tfidf = LogisticRegression(max_iter=1000)
+# lr_tfidf.fit(X_train_tfidf, y_train)
+
+# coefs = lr_tfidf.coef_[0]
+# top_positive_idx = np.argsort(coefs)[-10:]
+# top_negative_idx = np.argsort(coefs)[:10]
+
+# top_pos_words = [feature_names[i] for i in top_positive_idx]
+# top_neg_words = [feature_names[i] for i in top_negative_idx]
+
+# fig = make_subplots(rows=1, cols=2, subplot_titles=("Top Positive Words", "Top Negative Words"))
+
+# fig.add_trace(go.Bar(
+#     y=top_pos_words, x=coefs[top_positive_idx], orientation='h', 
+#     marker=dict(color='green'), name='Positive Magnitude'
+# ), row=1, col=1)
+
+# fig.add_trace(go.Bar(
+#     y=top_neg_words, x=abs(coefs[top_negative_idx]), orientation='h', 
+#     marker=dict(color='red'), name='Negative Magnitude'
+# ), row=1, col=2)
+
+# fig.update_layout(title_text='Top TF-IDF Features Determining Sentiment', template='plotly_dark', showlegend=True)
+# fig.show()
+# 2. Top TF-IDF terms: positive vs. negative
+feature_names = tfidf.get_feature_names_out()
+lr_tfidf = LogisticRegression(max_iter=1000)
+lr_tfidf.fit(X_train_tfidf, y_train)
+
+# In multi-class LogisticRegression, classes are ordered alphabetically: ['negative', 'neutral', 'positive']
+# Index 0 is the negative class, Index 2 is the positive class.
+coefs_neg = lr_tfidf.coef_[0] 
+coefs_pos = lr_tfidf.coef_[2] 
+
+# Get indices corresponding to the largest positive weights for each respective class
+top_positive_idx = np.argsort(coefs_pos)[-10:]
+top_negative_idx = np.argsort(coefs_neg)[-10:]
+
+top_pos_words = [feature_names[i] for i in top_positive_idx]
+top_neg_words = [feature_names[i] for i in top_negative_idx]
+
+fig = make_subplots(rows=1, cols=2, subplot_titles=("Top Positive Words", "Top Negative Words"))
+
+# Positive words
+fig.add_trace(go.Bar(
+    y=top_pos_words, 
+    x=coefs_pos[top_positive_idx], 
+    orientation='h', 
+    marker=dict(color='green'), 
+    name='Positive Magnitude'
+), row=1, col=1)
+
+# Negative words
+fig.add_trace(go.Bar(
+    y=top_neg_words, 
+    x=coefs_neg[top_negative_idx], 
+    orientation='h', 
+    marker=dict(color='red'), 
+    name='Negative Magnitude'
+), row=1, col=2)
+
+fig.update_layout(title_text='Top TF-IDF Features Determining Sentiment', template='plotly_dark', showlegend=True)
+fig.show()
+
+
+--- Cell 15 (code) ---
+# # 3. PCA 2D scatter by sentiment
+# fig = px.scatter(
+#     x=X_train_pca[:, 0], y=X_train_pca[:, 1], 
+#     color=y_train, opacity=0.6,
+#     labels={'x': 'Principal Component 1', 'y': 'Principal Component 2', 'color': 'Sentiment'},
+#     title='PCA 2D Projection of Headlines',
+#     template='plotly_dark',
+#     color_discrete_map={'positive': 'green', 'negative': 'red', 'neutral': 'yellow'}
+# )
+# fig.show()
+# 3. PCA 2D scatter by sentiment (Upgraded with Slider & Continuous Color Scale)
+import plotly.express as px
+import pandas as pd
+
+# Map the text labels to numerical scores so we can use a continuous color gradient
+sentiment_map = {'negative': -1, 'neutral': 0, 'positive': 1}
+numeric_sent = y_train.map(sentiment_map)
+
+fig = px.scatter(
+    x=X_train_pca[:, 0], y=X_train_pca[:, 1], 
+    color=numeric_sent, opacity=0.7,
+    # This matching color scale automatically renders -1 as Red, 0 as Yellow, 1 as Green
+    # color_continuous_scale='Bluered_r',
+    color_continuous_scale=[[0.0, "rgb(165,0,38)"],
+                [0.1111111111111111, "rgb(215,48,39)"],
+                [0.2222222222222222, "rgb(244,109,67)"],
+                [0.3333333333333333, "rgb(253,174,97)"],
+                [0.4444444444444444, "rgb(254,224,144)"],
+                [0.5555555555555556, "rgb(224,243,248)"],
+                [0.6666666666666666, "rgb(171,217,233)"],
+                [0.7777777777777778, "rgb(116,173,209)"],
+                [0.8888888888888888, "rgb(69,117,180)"],
+                [1.0, "rgb(49,54,149)"]], 
+    range_color=[-1, 1],
+    labels={'x': 'Principal Component 1', 'y': 'Principal Component 2', 'color': 'Sentiment Intensity'},
+    title='Interactive PCA 2D Projection of Headlines',
+    template='plotly_dark'
+)
+
+# Add an interactive zooming slider beneath the chart
+# Add an interactive zooming slider with a high-visibility colour scheme!
+fig.update_xaxes(
+    rangeslider=dict(
+        visible=True,
+        bgcolor='darkblue',          # Lighter dark-grey track
+        bordercolor='black',         # Cyan glowing border
+        borderwidth=2
+    )
+)
+
+fig.update_layout(coloraxis_colorbar=dict(title="Sentiment Map"))
+
+fig.show()
+
+
+--- Cell 16 (code) ---
+# 4. K-Means clustering
+from sklearn.cluster import KMeans
+kmeans = KMeans(n_clusters=2, random_state=42)
+clusters = kmeans.fit_predict(X_train_pca)
+
+fig = px.scatter(
+    x=X_train_pca[:, 0], y=X_train_pca[:, 1], 
+    color=[f"Cluster {c}" for c in clusters], opacity=0.6,
+    labels={'x': 'PC 1', 'y': 'PC 2', 'color': 'Cluster'},
+    title='K-Means Semantic Topic Clusters (k=2)',
+    template='plotly_dark',
+    color_discrete_sequence=px.colors.qualitative.Plotly
+)
+fig.show()
+
+for i in range(2):
+    center = kmeans.cluster_centers_[i]
+    distances = np.linalg.norm(X_train_pca - center, axis=1)
+    closest_idx = np.argmin(distances)
+    print(f"Cluster {i} Representative Headline: {X_train.iloc[closest_idx]}")
+
+--- Cell 17 (code) ---
+# Advanced Extension 1: 3D PCA Projection of Text Embeddings
+# Replaces the standard 2D scatter with an interactive 3D topology
+import plotly.express as px
+
+fig = px.scatter_3d(
+    x=X_train_pca[:, 0], y=X_train_pca[:, 1], z=X_train_pca[:, 2],
+    color=y_train, opacity=0.5, size_max=5,
+    labels={'x': 'PC 1', 'y': 'PC 2', 'z': 'PC 3', 'color': 'Sentiment'},
+    title='Interactive 3D PCA Projection of TF-IDF Headline Embeddings',
+    template='plotly_dark',
+    color_discrete_map={'positive': '#00ffcc', 'negative': '#ff3366', 'neutral': '#66ccff'}
+)
+fig.update_traces(marker=dict(size=3))
+fig.update_layout(margin=dict(l=0, r=0, b=0, t=40))
+fig.show()
+
+--- Cell 18 (code) ---
+# 5. Precision / Recall / F1 table
+metrics_df = pd.DataFrame(
+    precision_recall_fscore_support(y_test, y_pred, average=None, labels=['negative', 'positive']),
+    index=['Precision', 'Recall', 'F1', 'Support'],
+    columns=['Negative', 'Positive']
+).T
+display(metrics_df)
+
+--- Cell 19 (code) ---
+# 6. Most-confident correct + incorrect predictions
+probs = lr.predict_proba(X_test_pca)
+confidences = np.max(probs, axis=1)
+
+results_df = pd.DataFrame({
+    'text': X_test,
+    'true': y_test,
+    'pred': y_pred,
+    'confidence': confidences
+})
+
+correct = results_df[results_df['true'] == results_df['pred']]
+incorrect = results_df[results_df['true'] != results_df['pred']]
+
+print("Most confident CORRECT:")
+display(correct.sort_values('confidence', ascending=False).head(3))
+
+print("Most confident INCORRECT:")
+display(incorrect.sort_values('confidence', ascending=False).head(3))
+
+
+--- Cell 20 (code) ---
+# # 7. Training curves
+# plt.figure(figsize=(10,4))
+# plt.subplot(1,2,1)
+# plt.plot(history.history['loss'], label='Train')
+# plt.plot(history.history['val_loss'], label='Val')
+# plt.title('LSTM Loss Curve')
+# plt.legend()
+
+# plt.subplot(1,2,2)
+# plt.plot(history.history['accuracy'], label='Train')
+# plt.plot(history.history['val_accuracy'], label='Val')
+# plt.title('LSTM Accuracy Curve')
+# plt.legend()
+# plt.tight_layout()
+# plt.show()
+
+# 7. Training curves
+fig = make_subplots(rows=1, cols=2, subplot_titles=("LSTM Loss Curve", "LSTM Accuracy Curve"))
+
+fig.add_trace(go.Scatter(y=history.history['loss'], mode='lines', name='Train Loss', line=dict(color='cyan')), row=1, col=1)
+fig.add_trace(go.Scatter(y=history.history['val_loss'], mode='lines', name='Val Loss', line=dict(color='orange')), row=1, col=1)
+
+fig.add_trace(go.Scatter(y=history.history['accuracy'], mode='lines', name='Train Accuracy', line=dict(color='yellow')), row=1, col=2)
+fig.add_trace(go.Scatter(y=history.history['val_accuracy'], mode='lines', name='Val Accuracy', line=dict(color='aquamarine')), row=1, col=2)
+
+fig.update_layout(title_text='Deep Learning Training History (LSTM)', template='plotly_dark')
+fig.show()
+
+--- Cell 21 (markdown) ---
+# Part B: Strategy Design
+
+--- Cell 22 (markdown) ---
+### Step 1: Build Your Signal 
+
+
+--- Cell 23 (code) ---
+# Part B: Strategy Design
+
+# 1. Base Signal mapping
+headlines_df['date'] = pd.to_datetime(headlines_df['date'], format='%d-%m-%Y', errors='coerce')
+
+# For binary sentiment (1=positive, 0=negative), let's calculate N_pos and N_neg
+daily_counts = headlines_df.groupby('date')['sentiment_pred'].agg(
+    N_pos=lambda x: (x == 'positive').sum(),
+    N_neg=lambda x: (x == 'negative').sum(),
+    N_total='count'
+).reset_index()
+
+daily_counts['S_t'] = (daily_counts['N_pos'] - daily_counts['N_neg']) / daily_counts['N_total']
+
+# Merge with S&P500 Returns
+spx_df['date'] = pd.to_datetime(spx_df['date'])
+# Create a next-day SPX return for trading
+# The strategy: Use sentiment from day t to invest on day t+1
+spx_df['next_day_ret'] = spx_df['sprtrn'].shift(-1)
+
+merged_df = pd.merge(spx_df, daily_counts, on='date', how='left')
+merged_df['S_t'] = merged_df['S_t'].fillna(0) # Assume 0 sentiment if no news
+
+# Filter to test period matching the requirements (2022 to 2023)
+test_df = merged_df[(merged_df['date'] >= '2022-01-01') & (merged_df['date'] <= '2023-12-31')].copy()
+
+
+
+--- Cell 24 (markdown) ---
+### Step 2: Financial Institution
+
+
+--- Cell 25 (code) ---
+# Step 2: Financial intuition
+# 1. Base / Momentum strategy (S_t > 0 -> buy)
+test_df['w_momentum'] = (test_df['S_t'] > 0).astype(int)
+test_df['ret_momentum'] = test_df['w_momentum'] * test_df['next_day_ret']
+
+# 2. Mean-Reversion strategy (S_t < 0 -> buy)
+test_df['w_reversion'] = (test_df['S_t'] < 0).astype(int)
+test_df['ret_reversion'] = test_df['w_reversion'] * test_df['next_day_ret']
+
+# 3. Surprise Strategy (Deviation from 30 day avg)
+merged_df['S_t_30d_avg'] = merged_df['S_t'].rolling(window=30, min_periods=1).mean().shift(1)
+test_df['S_t_30d_avg'] = merged_df.loc[test_df.index, 'S_t_30d_avg']
+test_df['S_surprise'] = test_df['S_t'] - test_df['S_t_30d_avg']
+test_df['w_surprise'] = (test_df['S_surprise'] > 0).astype(int)
+test_df['ret_surprise'] = test_df['w_surprise'] * test_df['next_day_ret']
+
+print("Evaluating Strategy Implementations (Annualised Returns in Test Period):")
+print(f"Buy/Hold SPX:      {test_df['next_day_ret'].mean() * 252:.4f}")
+print(f"Momentum Strategy: {test_df['ret_momentum'].mean() * 252:.4f}")
+print(f"Mean-Reversion:    {test_df['ret_reversion'].mean() * 252:.4f}")
+print(f"Surprise Strategy: {test_df['ret_surprise'].mean() * 252:.4f}")
+
+--- Cell 26 (markdown) ---
+### Step 3: Topic Analysis
+
+--- Cell 27 (code) ---
+# Predict clusters for the full headline dataset
+headlines_df['headline_clean'] = headlines_df['headline'].fillna('')
+# We trained tfidf and svd earlier, reuse them:
+X_full_pca = svd.transform(tfidf.transform(headlines_df['headline_clean']))
+headlines_df['cluster'] = kmeans.predict(X_full_pca)
+
+headlines_ret_merged = pd.merge(headlines_df, spx_df, on='date', how='left')
+topic_returns = headlines_ret_merged.groupby('cluster')['next_day_ret'].mean()
+
+print("Average SPX next-day return by news topic (cluster):")
+print(topic_returns)
+
+# Let's inspect some sample headlines from each topic to find the narrative
+for c in topic_returns.index:
+    print(f"--- Cluster {c} Headlines ---")
+    sample_texts = headlines_df[headlines_df['cluster'] == c]['headline_clean'].sample(5, random_state=42)
+    for text in sample_texts:
+        print(f" - {text}")
+
+--- Cell 28 (markdown) ---
+### Step 4: Error Analysis
+
+--- Cell 29 (code) ---
+# Find days with high positive sentiment but severe market drop (e.g., S_t > 0.5, ret < -2%)
+error_days = test_df[(test_df['S_t'] > 0.5) & (test_df['next_day_ret'] < -0.02)]
+
+print("Notable Error Days (Strong positive sentiment, but SPX plummeted next day):")
+display(error_days[['date', 'S_t', 'next_day_ret']].head())
+
+if not error_days.empty:
+    bad_day = error_days.iloc[0]['date']
+    print(f"\\nInvestigating headlines published on {bad_day.date()}:")
+    bad_day_news = headlines_df[headlines_df['date'] == bad_day]['headline_clean']
+    for text in bad_day_news.head(10):
+        print(f" - {text}")
+
+--- Cell 30 (markdown) ---
+# Part C: Evaluation
+
+
+--- Cell 31 (code) ---
+import numpy as np
+import statsmodels.api as sm
+import matplotlib.pyplot as plt
+import seaborn as sns
+from scipy.stats import linregress
+
+sns.set_style('whitegrid')
+
+# First, merge FF3 factors to our dataset so we can calculate the alpha
+ff_df = pd.read_csv('./ECOM217_data/Shared_ff_factors_daily_2023.csv')
+ff_df['date'] = pd.to_datetime(ff_df['date'], format='%Y-%m-%d', errors='coerce')
+# We must shift FF factors to align with next_day_ret, or just merge them against the trading day t+1
+# Since our return is on day t+1, the actual risk-free rate and factors we care about are for day t+1.
+ff_df['trading_day'] = ff_df['date']
+
+# Create trading_day in merged_df which is date + 1 trading day (since date is publication date)
+# For simplicity and since SPX next_day_ret already maps directly to t+1, let's create a date_t1 column
+# spx_df dates are exact trading dates (t). So shift(-1) gets actual t+1 return.
+# We need to map FF3 factors to t+1. 
+temp_spx = spx_df[['date']].copy()
+temp_spx['trading_day'] = temp_spx['date'].shift(-1)
+merged_df = pd.merge(merged_df, temp_spx, on='date', how='left')
+
+# Join FF3 on trading_day
+merged_df = pd.merge(merged_df, ff_df, left_on='trading_day', right_on='trading_day', how='left', suffixes=('', '_ff'))
+
+# Also make sure the strategy w_t and ret is applied to the full dataset for In-Sample vs Out-Of-Sample
+merged_df['w_momentum'] = (merged_df['S_t'] > 0).astype(int)
+merged_df['ret_momentum'] = merged_df['w_momentum'] * merged_df['next_day_ret']
+
+# --- ADD THESE LINES: Regenerate Surprise Strategy on full dataset ---
+merged_df['S_t_30d_avg'] = merged_df['S_t'].rolling(window=30, min_periods=1).mean().shift(1)
+merged_df['S_surprise'] = merged_df['S_t'] - merged_df['S_t_30d_avg']
+merged_df['w_surprise'] = (merged_df['S_surprise'] > 0).astype(int)
+merged_df['ret_surprise'] = merged_df['w_surprise'] * merged_df['next_day_ret']
+
+
+
+# And drop NaNs for reliable regression
+eval_df = merged_df.dropna(subset=['next_day_ret', 'mktrf', 'smb', 'hml', 'rf']).copy()
+
+train_eval = eval_df[(eval_df['date'] >= '2016-01-01') & (eval_df['date'] <= '2021-12-31')].copy()
+test_eval = eval_df[(eval_df['date'] >= '2022-01-01') & (eval_df['date'] <= '2023-12-31')].copy()
+
+# Helper function to compute max drawdown
+def calc_max_drawdown(returns):
+    cum_returns = (1 + returns).cumprod()
+    peak = cum_returns.cummax()
+    drawdown = (cum_returns - peak) / peak
+    return drawdown.min()
+
+def evaluate_strategy(df, strat_col='ret_momentum', weight_col='w_momentum'):
+    # Tier 1
+    cum_ret = (1 + df[strat_col]).prod() - 1
+    ann_ret = df[strat_col].mean() * 252
+    
+    # Tier 2
+    ann_vol = df[strat_col].std() * np.sqrt(252)
+    sharpe = (ann_ret - (df['rf'].mean() * 252)) / ann_vol if ann_vol != 0 else 0
+    
+    # FF3 Alpha & t-stat
+    # Y = R_strategy - R_f
+    y = df[strat_col] - df['rf']
+    X = df[['mktrf', 'smb', 'hml']]
+    X = sm.add_constant(X)
+    
+    try:
+        model = sm.OLS(y, X).fit()
+        alpha = model.params['const'] * 252 # Annualised
+        t_stat = model.tvalues['const']
+    except:
+        alpha, t_stat = 0, 0
+    
+    # Tier 3
+    mdd = calc_max_drawdown(df[strat_col])
+    calmar = ann_ret / abs(mdd) if mdd != 0 else 0
+    
+    # Tier 4
+    turnover = df[weight_col].diff().abs().fillna(0)
+    cost_5bps = turnover * 0.0005
+    cost_10bps = turnover * 0.0010
+    
+    net_5_ret = df[strat_col] - cost_5bps
+    net_10_ret = df[strat_col] - cost_10bps
+    
+    ann_net_5 = net_5_ret.mean() * 252
+    sharpe_5 = (ann_net_5 - (df['rf'].mean() * 252)) / (net_5_ret.std() * np.sqrt(252))
+    
+    ann_net_10 = net_10_ret.mean() * 252
+    sharpe_10 = (ann_net_10 - (df['rf'].mean() * 252)) / (net_10_ret.std() * np.sqrt(252))
+    
+    print(f"--- Strategy Performance ---")
+    print(f"Cumulative Return: {cum_ret:.2%}")
+    print(f"Annualised Return: {ann_ret:.2%}")
+    print(f"Sharpe Ratio:      {sharpe:.3f}")
+    print(f"FF3 Alpha (Ann):   {alpha:.2%} (t-stat: {t_stat:.2f})")
+    print(f"Max Drawdown:      {mdd:.2%}")
+    print(f"Calmar Ratio:      {calmar:.3f}")
+    print(f"Net Sharpe (5bps): {sharpe_5:.3f}")
+    print(f"Net Sharpe(10bps): {sharpe_10:.3f}\\n")
+
+# print(">>> OUT-OF-SAMPLE EVALUATION (2022-2023) <<<")
+# evaluate_strategy(test_eval)
+
+# print(">>> IN-SAMPLE EVALUATION (2016-2021) <<<")
+# evaluate_strategy(train_eval)
+
+print(">>> OUT-OF-SAMPLE EVALUATION (2022-2023) <<<")
+evaluate_strategy(test_eval, strat_col='ret_surprise', weight_col='w_surprise')
+
+print(">>> IN-SAMPLE EVALUATION (2016-2021) <<<")
+evaluate_strategy(train_eval, strat_col='ret_surprise', weight_col='w_surprise')
+
+    
+
+--- Cell 32 (markdown) ---
+### Plot 1: Sentiment Time Series Overlaid with SPX Returns
+
+--- Cell 33 (code) ---
+# # Re-aggregate sentiment to a monthly rolling average so the plot isn't a chaotic mess
+# test_eval['S_t_smooth'] = test_eval['S_t'].rolling(10).mean()
+# test_eval['SPX_Cum'] = (1 + test_eval['next_day_ret']).cumprod()
+
+# fig, ax1 = plt.subplots(figsize=(10, 5))
+# ax1.plot(test_eval['trading_day'], test_eval['SPX_Cum'], color='blue', label='SPX Cumulative')
+# ax1.set_ylabel('SPX Cumulative Return', color='blue')
+
+# ax2 = ax1.twinx()
+# ax2.plot(test_eval['trading_day'], test_eval['S_t_smooth'], color='orange', alpha=0.6, label='10-Day Avg Sentiment')
+# ax2.set_ylabel('Sentiment Signal', color='orange')
+
+# plt.title('Plot 1: Sentiment Time Series (10-Day Avg) vs SPX Cumulative Returns (Out-of-Sample)')
+# fig.tight_layout()
+# plt.show()
+
+# Re-aggregate sentiment to a monthly rolling average so the plot isn't a chaotic mess
+test_eval['S_t_smooth'] = test_eval['S_surprise'].rolling(10).mean()
+test_eval['SPX_Cum'] = (1 + test_eval['next_day_ret']).cumprod()
+
+fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+fig.add_trace(
+    go.Scatter(x=test_eval['trading_day'], y=test_eval['SPX_Cum'], name="SPX Cumulative Return", mode='lines', line=dict(color='cyan')),
+    secondary_y=False,
+)
+
+fig.add_trace(
+    go.Scatter(x=test_eval['trading_day'], y=test_eval['S_t_smooth'], name="10-Day Avg Sentiment", mode='lines', opacity=0.7, line=dict(color='orange', dash='dot')),
+    secondary_y=True,
+)
+
+fig.update_layout(
+    title_text="Plot 1: Sentiment Time Series (10-Day Avg) vs SPX Cumulative Returns (Out-of-Sample)",
+    template='plotly_dark',
+    hovermode='x unified'
+)
+
+fig.update_yaxes(title_text="SPX Cumulative Return", secondary_y=False)
+fig.update_yaxes(title_text="Sentiment Signal", secondary_y=True)
+fig.show()
+
+--- Cell 34 (markdown) ---
+### Plot 2: Scatter: Sentiment vs Next-Day Return
+
+--- Cell 35 (code) ---
+# slope, intercept, r_value, p_value, std_err = linregress(test_eval['S_t'], test_eval['next_day_ret'])
+
+# plt.figure(figsize=(8, 6))
+# sns.regplot(x='S_t', y='next_day_ret', data=test_eval, scatter_kws={'alpha':0.3}, line_kws={'color':'red'})
+# plt.title(f"Plot 2: Sentiment vs Next-Day Return\\nR-squared: {r_value**2:.5f}")
+# plt.xlabel("Daily Sentiment (S_t)")
+# plt.ylabel("Next-Day SPX Return")
+# plt.show()
+
+# Plot 2: Scatter: Sentiment vs Next-Day Return using Plotly
+slope, intercept, r_value, p_value, std_err = linregress(test_eval['S_t'], test_eval['next_day_ret'])
+
+fig = px.scatter(
+    test_eval, x='S_surprise', y='next_day_ret', 
+    opacity=0.5, trendline="ols",
+    labels={'S_t': 'Daily Sentiment (S_t)', 'next_day_ret': 'Next-Day SPX Return'},
+    title=f"Plot 2: Sentiment vs Next-Day Return<br><sup>R-squared: {r_value**2:.5f}</sup>",
+    template='plotly_dark'
+)
+fig.data[0].marker.color = 'cyan'
+if len(fig.data) > 1:
+    fig.data[1].line.color = 'red'
+
+fig.show()
+
+--- Cell 36 (markdown) ---
+### Plot 3: Cumulative Return: Strategy vs Buy-and-Hold vs 50/50
+
+--- Cell 37 (code) ---
+# test_eval['Cum_Hold'] = (1 + test_eval['next_day_ret']).cumprod()
+# test_eval['Cum_Strat'] = (1 + test_eval['ret_momentum']).cumprod()
+
+# # 50/50 strategy matches 50% wait in cash (0 return, implicitly excluding RF to keep it simple) and 50% in SPX
+# test_eval['ret_5050'] = test_eval['next_day_ret'] * 0.5
+# test_eval['Cum_5050'] = (1 + test_eval['ret_5050']).cumprod()
+
+# plt.figure(figsize=(10, 5))
+# plt.plot(test_eval['trading_day'], test_eval['Cum_Hold'], label='Buy & Hold (SPX)', color='black', linestyle='--')
+# plt.plot(test_eval['trading_day'], test_eval['Cum_Strat'], label='Momentum Strategy', color='green', linewidth=2)
+# plt.plot(test_eval['trading_day'], test_eval['Cum_5050'], label='50/50 (SPX/Cash)', color='red', linestyle=':')
+
+# plt.title('Plot 3: Cumulative Return Comparison (Test Period: 2022-2023)')
+# plt.xlabel('Date')
+# plt.ylabel('Cumulative Return')
+# plt.legend()
+# plt.show()
+
+# Plot 3: Cumulative Return Comparisons
+test_eval['Cum_Hold'] = (1 + test_eval['next_day_ret']).cumprod()
+test_eval['Cum_Strat'] = (1 + test_eval['ret_surprise']).cumprod()
+
+test_eval['ret_5050'] = test_eval['next_day_ret'] * 0.5
+test_eval['Cum_5050'] = (1 + test_eval['ret_5050']).cumprod()
+
+fig = go.Figure()
+
+fig.add_trace(go.Scatter(x=test_eval['trading_day'], y=test_eval['Cum_Hold'], mode='lines', name='Buy & Hold (SPX)', line=dict(color='lightblue', dash='dash')))
+fig.add_trace(go.Scatter(x=test_eval['trading_day'], y=test_eval['Cum_Strat'], mode='lines', name='Surprise Strategy', line=dict(color='green', width=3)))
+fig.add_trace(go.Scatter(x=test_eval['trading_day'], y=test_eval['Cum_5050'], mode='lines', name='50/50 (SPX/Cash)', line=dict(color='red', dash='dot')))
+
+fig.update_layout(
+    title='Plot 3: Cumulative Return Comparison (Test Period: 2022-2023)',
+    xaxis_title='Date',
+    yaxis_title='Cumulative Return Multiplier',
+    template='plotly_dark',
+    hovermode='x unified'
+)
+fig.update_xaxes(rangeslider_visible=True)
+fig.show()
+
+--- Cell 38 (markdown) ---
+---
+
+--- Cell 39 (code) ---
+# Advanced Extension 4: Strategy Execution Overlay
+# Shows the exact location on the S&P 500 curve where our strategy went LONG vs CASH
+import plotly.graph_objects as go
+
+test_eval['SPX_Price_Simulated'] = (1 + test_eval['next_day_ret']).cumprod() * 100
+
+fig = go.Figure()
+
+# Plot the SPX Cumulative baseline
+fig.add_trace(go.Scatter(
+    x=test_eval['trading_day'], y=test_eval['SPX_Price_Simulated'],
+    mode='lines', name='SPX Trajectory',
+    line=dict(color='white', width=2)
+))
+
+# Identify days where Momentum strategy is LONG vs CASH
+long_days = test_eval[test_eval['w_surprise'] == 1]
+cash_days = test_eval[test_eval['w_surprise'] == 0]
+
+fig.add_trace(go.Scatter(
+    x=long_days['trading_day'], y=long_days['SPX_Price_Simulated'],
+    mode='markers', name='Long Entry (S_t > 0)',
+    marker=dict(color='#00ffcc', size=1, symbol='triangle-up')
+))
+
+fig.add_trace(go.Scatter(
+    x=cash_days['trading_day'], y=cash_days['SPX_Price_Simulated'],
+    mode='markers', name='Cash / No Trade (S_t <= 0)',
+    marker=dict(color='#ff3366', size=5, symbol='circle-x')
+))
+
+fig.update_layout(
+    title='Momentum Strategy: Live Execution Overlay Map',
+    xaxis_title='Date', yaxis_title='Normalized Index P&L Trajectory',
+    template='plotly_dark', hovermode='x unified'
+)
+fig.show()
+
+--- Cell 40 (code) ---
+# Advanced Extension 2: Sentiment Calendar Matrix (2023 Snapshot)
+# Maps our computed S_t signal into a daily frequency calendar mapping
+import calendar
+import plotly.graph_objects as go
+import numpy as np
+
+# Prepare data for 2023 sentiment heatmap
+heat_df = daily_counts[daily_counts['date'].dt.year == 2023].copy()
+heat_df['month'] = heat_df['date'].dt.month
+heat_df['day'] = heat_df['date'].dt.day
+
+# Create matrix (Months x Days)
+heatmap_matrix = np.full((12, 31), np.nan)
+for _, row in heat_df.iterrows():
+    m = int(row['month']) - 1
+    d = int(row['day']) - 1
+    # Only assign if not out of bounds
+    if d < 31:
+        heatmap_matrix[m, d] = row['S_t']
+
+months = calendar.month_abbr[1:]
+days = list(range(1, 32))
+
+fig = go.Figure(data=go.Heatmap(
+    z=heatmap_matrix, x=days, y=months,
+    colorscale='RdBu', zmid=0,
+    hoverongaps=False
+))
+
+fig.update_layout(
+    title='Macroeconomic Sentiment Density Heatmap (2023)',
+    xaxis_title='Day of Month',
+    yaxis_title='Month',
+    template='plotly_dark'
+)
+fig.show()
